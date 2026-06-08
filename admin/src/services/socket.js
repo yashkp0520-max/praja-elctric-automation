@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:5000';
+const SOCKET_URL = 'https://praja-elctric-automation-backend.onrender.com';
 
 // Singleton socket instance with auto-reconnection
 const socket = io(SOCKET_URL, {
