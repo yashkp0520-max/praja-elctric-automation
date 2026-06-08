@@ -41,7 +41,7 @@ io.on('connection', (socket) => {
 // CORS configuration — allow frontend and admin origins
 app.use(cors({
   origin: [
-    'http://localhost:5173',  // Frontend dev server
+    'https://praja-elctric-automation-backend.onrender.com',  // Frontend dev server
     'http://localhost:5174',  // Admin dev server
   ],
   credentials: true,
