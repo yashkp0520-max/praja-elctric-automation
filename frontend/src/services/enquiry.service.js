@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:5000/api/enquiries';
+const API_URL = 'https://praja-elctric-automation-backend.onrender.com/api/enquiries';
 
 export const enquiryService = {
   submitEnquiry: async (enquiryData) => {
