@@ -1,0 +1,17 @@
+{
+  "name": "praja-electric-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Praja Electric & Automation — Monorepo (Frontend + Backend + Admin)",
+  "scripts": {
+    "dev": "concurrently -n FRONTEND,BACKEND,ADMIN -c cyan,green,magenta \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:admin\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm start",
+    "dev:admin": "cd admin && npm run dev",
+    "install:all": "cd frontend && npm install && cd ../admin && npm install && cd ../backend && npm install",
+    "seed": "cd backend && node seed.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
