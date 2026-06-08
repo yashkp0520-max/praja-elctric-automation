@@ -1,15 +1,19 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { FaUserCircle, FaSignOutAlt, FaHome, FaCogs, FaInfoCircle, FaBolt } from 'react-icons/fa';
+import { FaUserCircle, FaSignOutAlt, FaHome, FaCogs, FaInfoCircle, FaBolt, FaBars, FaTimes } from 'react-icons/fa';
+import { motion, AnimatePresence } from 'framer-motion';
 
 
 export default function Navbar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [isOpen, setIsOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
     navigate('/');
+    setIsOpen(false);
   };
 
   return (
@@ -82,8 +86,74 @@ export default function Navbar() {
               </div>
             )}
           </div>
+
+          {/* Mobile Menu Toggle Button */}
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className="md:hidden text-gray-300 hover:text-electric p-2 rounded-lg transition-colors focus:outline-none flex items-center justify-center shrink-0 border border-transparent hover:border-electric/30"
+            aria-label="Toggle Menu"
+          >
+            {isOpen ? <FaTimes className="text-2xl" /> : <FaBars className="text-2xl" />}
+          </button>
+
         </div>
       </div>
+
+      {/* Mobile Menu Dropdown */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            className="md:hidden bg-navy/95 backdrop-blur-lg border-b border-electric/20 overflow-hidden"
+          >
+            <div className="px-4 pt-2 pb-6 space-y-2 flex flex-col">
+              <Link 
+                to="/" 
+                onClick={() => setIsOpen(false)}
+                className="flex items-center gap-3 text-gray-300 hover:text-electric px-4 py-3 rounded-xl text-base font-medium transition-colors hover:bg-electric/10"
+              >
+                <FaHome /> Home
+              </Link>
+              <Link 
+                to="/panels" 
+                onClick={() => setIsOpen(false)}
+                className="flex items-center gap-3 text-gray-300 hover:text-electric px-4 py-3 rounded-xl text-base font-medium transition-colors hover:bg-electric/10"
+              >
+                <FaBolt /> Panels
+              </Link>
+              <Link 
+                to="/services" 
+                onClick={() => setIsOpen(false)}
+                className="flex items-center gap-3 text-gray-300 hover:text-electric px-4 py-3 rounded-xl text-base font-medium transition-colors hover:bg-electric/10"
+              >
+                <FaCogs /> Services
+              </Link>
+              <Link 
+                to="/about" 
+                onClick={() => setIsOpen(false)}
+                className="flex items-center gap-3 text-gray-300 hover:text-electric px-4 py-3 rounded-xl text-base font-medium transition-colors hover:bg-electric/10"
+              >
+                <FaInfoCircle /> About Us
+              </Link>
+              
+              {!user && (
+                <div className="pt-4 border-t border-white/5 flex flex-col gap-3">
+                  <Link 
+                    to="/login" 
+                    onClick={() => setIsOpen(false)}
+                    className="flex justify-center items-center text-gray-300 hover:text-white py-3 rounded-xl text-base font-medium bg-steel/30 border border-white/5"
+                  >
+                    Login
+                  </Link>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </nav>
   );
 }

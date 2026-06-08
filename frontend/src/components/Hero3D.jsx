@@ -219,10 +219,10 @@ export default function Hero3D() {
           initial={{ opacity: 0, y: -50 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8 }}
-          className="font-orbitron text-5xl md:text-7xl lg:text-8xl font-black text-white mb-8 tracking-tighter leading-none flex flex-col items-center gap-2 md:gap-4 pointer-events-auto"
+          className="font-orbitron text-3xl sm:text-5xl md:text-7xl lg:text-8xl font-black text-white mb-8 tracking-tighter leading-none flex flex-col items-center gap-2 md:gap-4 pointer-events-auto"
         >
           <span>PRAJA <span className="text-electric drop-shadow-[0_0_20px_rgba(0,212,255,0.6)]">ELECTRIC</span></span>
-          <span className="text-3xl md:text-5xl lg:text-6xl text-gray-300 drop-shadow-md tracking-widest">& AUTOMATION</span>
+          <span className="text-lg sm:text-3xl md:text-5xl lg:text-6xl text-gray-300 drop-shadow-md tracking-widest">& AUTOMATION</span>
         </motion.h1>
 
         {/* Subtitles */}
@@ -232,10 +232,10 @@ export default function Hero3D() {
           transition={{ duration: 0.8, delay: 0.4 }}
           className="space-y-6 mb-12 max-w-4xl pointer-events-auto"
         >
-          <h2 className="text-xl md:text-3xl text-gray-200 font-rajdhani font-bold leading-tight uppercase tracking-[0.2em]">
+          <h2 className="text-base sm:text-xl md:text-3xl text-gray-200 font-rajdhani font-bold leading-tight uppercase tracking-[0.2em] px-2">
             Pioneering <span className="text-electric">Advanced Electrical</span> & <span className="text-electric">Automation</span><br /> Excellence for Modern Industries
           </h2>
-          <p className="text-gray-400 text-lg md:text-xl font-light tracking-wide leading-relaxed italic max-w-2xl mx-auto">
+          <p className="text-gray-400 text-sm sm:text-lg md:text-xl font-light tracking-wide leading-relaxed italic max-w-2xl mx-auto px-4">
             Empowering industrial frontiers with high-precision engineering and smart, future-ready power solutions.
           </p>
         </motion.div>

@@ -45,7 +45,7 @@ export default function HomeExpertise() {
             </div>
             
             {/* Background Accent Box */}
-            <div className="absolute -top-6 -left-6 w-full h-full border-2 border-electric/20 rounded-2xl -z-10" />
+            <div className="absolute -top-6 -left-6 w-full h-full border-2 border-electric/20 rounded-2xl -z-10 hidden sm:block" />
           </motion.div>
 
           {/* Content Section */}

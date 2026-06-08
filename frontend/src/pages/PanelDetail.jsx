@@ -15,7 +15,8 @@ import {
   FaPaperPlane,
   FaShieldAlt,
   FaWrench,
-  FaRegLightbulb
+  FaRegLightbulb,
+  FaInfoCircle
 } from 'react-icons/fa';
 
 const panelsData = {
@@ -424,7 +425,7 @@ export default function PanelDetail() {
               <div className="bg-steel/30 border border-white/5 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-sm">
                 
                 {/* Tab Headers */}
-                <div className="flex border-b border-white/5 bg-steel/50">
+                <div className="flex border-b border-white/5 bg-steel/50 overflow-x-auto whitespace-nowrap scrollbar-none">
                   {[
                     { id: 'overview', name: 'Overview', icon: <FaInfoCircle /> },
                     { id: 'features', name: 'Key Features', icon: <FaShieldAlt /> },
@@ -434,15 +435,14 @@ export default function PanelDetail() {
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
-                      className={`flex-1 flex items-center justify-center gap-2 py-4 px-3 text-xs sm:text-sm font-semibold tracking-wider transition-all relative ${
+                      className={`flex-1 md:flex-none flex items-center justify-center gap-2 py-4 px-4 sm:px-6 text-xs sm:text-sm font-semibold tracking-wider transition-all relative shrink-0 ${
                         activeTab === tab.id 
                           ? 'text-electric bg-[#0b1b33]/40' 
                           : 'text-gray-400 hover:text-white hover:bg-steel/20'
                       }`}
                     >
                       {tab.icon}
-                      <span className="hidden md:inline">{tab.name}</span>
-                      <span className="md:hidden">{tab.name.split(' ')[0]}</span>
+                      <span>{tab.name}</span>
                       {activeTab === tab.id && (
                         <motion.div 
                           layoutId="activeTabUnderline" 
