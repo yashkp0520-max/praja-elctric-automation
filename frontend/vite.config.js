@@ -8,9 +8,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'https://praja-elctric-automation-backend.onrender.com',
+        target: 'http://localhost:5000',
         changeOrigin: true,
       },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 1000 // Size in KB
+  }
 })
