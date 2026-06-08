@@ -20,8 +20,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: [
-      'http://localhost:5173',  // Frontend dev server
-      'http://localhost:5174',  // Admin dev server
+      'https://praja-elctric-automation-backend.onrender.com',  // Frontend dev server
+      'https://praja-elctric-automation-backend.onrender.com',  // Admin dev server
     ],
     credentials: true,
   },
@@ -42,7 +42,7 @@ io.on('connection', (socket) => {
 app.use(cors({
   origin: [
     'https://praja-elctric-automation-backend.onrender.com',  // Frontend dev server
-    'http://localhost:5174',  // Admin dev server
+    'https://praja-elctric-automation-backend.onrender.com',  // Admin dev server
   ],
   credentials: true,
 }));
