@@ -1,34 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { adminService } from '../services/admin.service';
+import socket from '../services/socket';
 import { 
-  FaBoxOpen, 
   FaComments, 
   FaQuestionCircle, 
   FaUsers, 
-  FaPlus, 
-  FaEdit, 
   FaTrash, 
-  FaTimes, 
   FaSearch, 
   FaSignOutAlt, 
   FaTachometerAlt, 
   FaCog, 
-  FaPlusCircle, 
-  FaCheck, 
-  FaSpinner, 
-  FaArrowLeft, 
-  FaFolder, 
-  FaDollarSign,
-  FaFileAlt
+  FaSpinner,
+  FaBell,
+  FaTimes
 } from 'react-icons/fa';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
-  const [stats, setStats] = useState({ products: 0, users: 0, feedbacks: 0, enquiries: 0 });
-  const [products, setProducts] = useState([]);
+  const [stats, setStats] = useState({ users: 0, feedbacks: 0, enquiries: 0 });
   const [feedbacks, setFeedbacks] = useState([]);
   const [enquiries, setEnquiries] = useState([]);
   const [users, setUsers] = useState([]);
@@ -36,78 +28,186 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Real-time state
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [badgeCounts, setBadgeCounts] = useState({ enquiries: 0, feedbacks: 0 });
+  const [newItemIds, setNewItemIds] = useState(new Set());
+  const pollIntervalRef = useRef(null);
+  const notifIdRef = useRef(0);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  // Product CRUD states
-  const [showProductModal, setShowProductModal] = useState(false); // false | 'create' | 'edit'
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [productForm, setProductForm] = useState({
-    name: '',
-    description: '',
-    price: '',
-    category: 'panels',
-    imageUrl: '',
-    specifications: [{ key: '', value: '' }],
-    stock: 0,
-    isActive: true
-  });
-
-  const categoryLabels = {
-    panels: 'Control Panels',
-    plc: 'PLC Systems',
-    sensors: 'Sensors',
-    drives: 'VFD Drives',
-    components: 'Components'
-  };
-
-  const loadData = async () => {
-    setLoading(true);
+  // ─── Data Loading ──────────────────────────────────────────
+  const loadData = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     try {
-      const [statsData, productsData, feedbacksData, enquiriesData, usersData] = await Promise.all([
+      const [statsData, feedbacksData, enquiriesData, usersData] = await Promise.all([
         adminService.getStats(),
-        adminService.getAllProducts(),
         adminService.getAllFeedbacks(),
         adminService.getAllEnquiries(),
         adminService.getAllUsers()
       ]);
       setStats(statsData);
-      setProducts(productsData);
       setFeedbacks(feedbacksData);
       setEnquiries(enquiriesData);
       setUsers(usersData);
       setError(null);
     } catch (err) {
       console.error("Error loading dashboard data:", err);
-      setError(err.response?.data?.error || err.message || "Failed to load dashboard data. Ensure backend is running.");
+      if (showSpinner) {
+        setError(err.response?.data?.error || err.message || "Failed to load dashboard data. Ensure backend is running.");
+      }
     } finally {
-      setLoading(false);
+      if (showSpinner) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
+  }, [loadData]);
+
+  // ─── Notification Helpers ──────────────────────────────────
+  const addNotification = useCallback((type, data) => {
+    const id = ++notifIdRef.current;
+    const notif = {
+      id,
+      type,
+      title: type === 'enquiry' ? '📩 New Enquiry' : '💬 New Feedback',
+      message: type === 'enquiry'
+        ? `${data.name} sent an enquiry about ${data.product || 'General'}`
+        : `${data.name} left ${data.rating ? data.rating + '★' : ''} feedback`,
+      timestamp: new Date(),
+    };
+    setNotifications(prev => [notif, ...prev].slice(0, 20));
+
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
   }, []);
 
+  const dismissNotification = useCallback((id) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }, []);
+
+  // ─── Socket.IO Real-Time ───────────────────────────────────
+  useEffect(() => {
+    const handleConnect = () => {
+      setSocketConnected(true);
+      // Stop fallback polling when socket connects
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+
+    const handleDisconnect = () => {
+      setSocketConnected(false);
+      // Start fallback polling when socket disconnects
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(() => {
+          loadData(false);
+        }, 15000);
+      }
+    };
+
+    const handleNewEnquiry = (enquiry) => {
+      setEnquiries(prev => {
+        // Avoid duplicates
+        if (prev.some(e => e._id === enquiry._id)) return prev;
+        return [enquiry, ...prev];
+      });
+      setStats(prev => ({ ...prev, enquiries: (prev.enquiries || 0) + 1 }));
+      setBadgeCounts(prev => ({ ...prev, enquiries: prev.enquiries + 1 }));
+      setNewItemIds(prev => new Set(prev).add(enquiry._id));
+      addNotification('enquiry', enquiry);
+    };
+
+    const handleNewFeedback = (feedback) => {
+      setFeedbacks(prev => {
+        if (prev.some(f => f._id === feedback._id)) return prev;
+        return [feedback, ...prev];
+      });
+      setStats(prev => ({ ...prev, feedbacks: (prev.feedbacks || 0) + 1 }));
+      setBadgeCounts(prev => ({ ...prev, feedbacks: prev.feedbacks + 1 }));
+      setNewItemIds(prev => new Set(prev).add(feedback._id));
+      addNotification('feedback', feedback);
+    };
+
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('new-enquiry', handleNewEnquiry);
+    socket.on('new-feedback', handleNewFeedback);
+
+    // Check initial connection state
+    if (socket.connected) {
+      setSocketConnected(true);
+    } else {
+      // Start polling as fallback until socket connects
+      pollIntervalRef.current = setInterval(() => {
+        loadData(false);
+      }, 15000);
+    }
+
+    return () => {
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('new-enquiry', handleNewEnquiry);
+      socket.off('new-feedback', handleNewFeedback);
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [loadData, addNotification]);
+
+  // ─── Tab Switch — Clear Badges & Highlights ────────────────
+  const handleTabSwitch = useCallback((tabId) => {
+    setActiveTab(tabId);
+    setSearchQuery('');
+    if (tabId === 'enquiries') {
+      setBadgeCounts(prev => ({ ...prev, enquiries: 0 }));
+      // Clear new highlights for enquiry items after a short delay
+      setTimeout(() => {
+        setNewItemIds(prev => {
+          const next = new Set(prev);
+          enquiries.forEach(e => next.delete(e._id));
+          return next;
+        });
+      }, 2000);
+    } else if (tabId === 'feedbacks') {
+      setBadgeCounts(prev => ({ ...prev, feedbacks: 0 }));
+      setTimeout(() => {
+        setNewItemIds(prev => {
+          const next = new Set(prev);
+          feedbacks.forEach(f => next.delete(f._id));
+          return next;
+        });
+      }, 2000);
+    }
+  }, [enquiries, feedbacks]);
+
+  // ─── CRUD Actions ──────────────────────────────────────────
   const handleLogout = () => {
     logout();
     navigate('/login');
   };
 
-  // Feedback Actions
   const handleDeleteFeedback = async (id) => {
     if (!window.confirm('Are you sure you want to delete this feedback?')) return;
     try {
       await adminService.deleteFeedback(id);
       setFeedbacks(feedbacks.filter(f => f._id !== id));
       setStats(prev => ({ ...prev, feedbacks: Math.max(0, prev.feedbacks - 1) }));
+      setNewItemIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     } catch (err) {
       alert("Error deleting feedback: " + (err.response?.data?.error || err.message));
     }
   };
 
-  // Enquiry Actions
   const handleUpdateEnquiryStatus = async (id, status) => {
     try {
       const updated = await adminService.updateEnquiryStatus(id, status);
@@ -123,105 +223,13 @@ export default function Dashboard() {
       await adminService.deleteEnquiry(id);
       setEnquiries(enquiries.filter(e => e._id !== id));
       setStats(prev => ({ ...prev, enquiries: Math.max(0, prev.enquiries - 1) }));
+      setNewItemIds(prev => { const next = new Set(prev); next.delete(id); return next; });
     } catch (err) {
       alert("Error deleting enquiry: " + (err.response?.data?.error || err.message));
     }
   };
 
-  // Product CRUD Handlers
-  const openCreateModal = () => {
-    setSelectedProduct(null);
-    setProductForm({
-      name: '',
-      description: '',
-      price: '',
-      category: 'panels',
-      imageUrl: '',
-      specifications: [{ key: '', value: '' }],
-      stock: 0,
-      isActive: true
-    });
-    setShowProductModal('create');
-  };
-
-  const openEditModal = (product) => {
-    setSelectedProduct(product);
-    setProductForm({
-      name: product.name || '',
-      description: product.description || '',
-      price: product.price || '',
-      category: product.category || 'panels',
-      imageUrl: (product.images && product.images[0]) || '',
-      specifications: product.specifications && product.specifications.length > 0 
-        ? product.specifications.map(s => ({ key: s.key, value: s.value }))
-        : [{ key: '', value: '' }],
-      stock: product.stock ?? 0,
-      isActive: product.isActive ?? true
-    });
-    setShowProductModal('edit');
-  };
-
-  const handleDeleteProduct = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this product?')) return;
-    try {
-      await adminService.deleteProduct(id);
-      setProducts(products.filter(p => p._id !== id));
-      setStats(prev => ({ ...prev, products: Math.max(0, prev.products - 1) }));
-    } catch (err) {
-      alert("Error deleting product: " + (err.response?.data?.error || err.message));
-    }
-  };
-
-  const handleAddSpecField = () => {
-    setProductForm(prev => ({
-      ...prev,
-      specifications: [...prev.specifications, { key: '', value: '' }]
-    }));
-  };
-
-  const handleRemoveSpecField = (index) => {
-    setProductForm(prev => ({
-      ...prev,
-      specifications: prev.specifications.filter((_, i) => i !== index)
-    }));
-  };
-
-  const handleSpecChange = (index, field, value) => {
-    const updatedSpecs = [...productForm.specifications];
-    updatedSpecs[index][field] = value;
-    setProductForm(prev => ({
-      ...prev,
-      specifications: updatedSpecs
-    }));
-  };
-
-  const handleSubmitProduct = async (e) => {
-    e.preventDefault();
-    if (!productForm.name.trim()) return alert("Product Name is required");
-    
-    const formattedData = {
-      ...productForm,
-      price: Number(productForm.price) || 0,
-      stock: Number(productForm.stock) || 0,
-      images: productForm.imageUrl ? [productForm.imageUrl] : [],
-      specifications: productForm.specifications.filter(spec => spec.key.trim() && spec.value.trim())
-    };
-
-    try {
-      if (showProductModal === 'create') {
-        const created = await adminService.createProduct(formattedData);
-        setProducts([created, ...products]);
-        setStats(prev => ({ ...prev, products: prev.products + 1 }));
-      } else {
-        const updated = await adminService.updateProduct(selectedProduct._id, formattedData);
-        setProducts(products.map(p => p._id === selectedProduct._id ? updated : p));
-      }
-      setShowProductModal(false);
-    } catch (err) {
-      alert("Error saving product: " + (err.response?.data?.error || err.message));
-    }
-  };
-
+  // ─── Loading & Error States ────────────────────────────────
   if (loading) {
     return (
       <div className="bg-navy min-h-screen text-white p-10 flex flex-col items-center justify-center font-rajdhani">
@@ -238,7 +246,7 @@ export default function Dashboard() {
           <h2 className="text-red-400 font-orbitron font-bold text-2xl mb-4">Connection Failed</h2>
           <p className="text-gray-400 text-sm leading-relaxed mb-6">{error}</p>
           <button 
-            onClick={loadData}
+            onClick={() => loadData()}
             className="bg-electric text-navy font-bold px-6 py-2.5 rounded-lg hover:bg-white transition-colors"
           >
             Retry Connection
@@ -248,13 +256,73 @@ export default function Dashboard() {
     );
   }
 
+  // ─── Sidebar tab config ────────────────────────────────────
+  const sidebarTabs = [
+    { id: 'overview', label: 'Overview', icon: FaTachometerAlt, badge: 0 },
+    { id: 'enquiries', label: 'Enquiries', icon: FaQuestionCircle, badge: badgeCounts.enquiries },
+    { id: 'feedbacks', label: 'Feedbacks', icon: FaComments, badge: badgeCounts.feedbacks },
+  ];
+
   return (
     <div className="bg-navy min-h-screen text-white font-rajdhani flex flex-col md:flex-row relative overflow-hidden">
       {/* Background neon orb decor */}
       <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-electric/5 rounded-full blur-[120px] pointer-events-none"></div>
       <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] bg-electric/5 rounded-full blur-[100px] pointer-events-none"></div>
 
-      {/* Sidebar Navigation */}
+      {/* ═══ Toast Notifications ═══ */}
+      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-3 pointer-events-none" style={{ maxWidth: '380px' }}>
+        <AnimatePresence>
+          {notifications.map((notif) => (
+            <motion.div
+              key={notif.id}
+              initial={{ opacity: 0, x: 80, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 80, scale: 0.9 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              className={`pointer-events-auto bg-steel/95 backdrop-blur-xl border rounded-xl p-4 shadow-[0_0_30px_rgba(0,0,0,0.4)] cursor-pointer ${
+                notif.type === 'enquiry'
+                  ? 'border-amber-500/40 shadow-[0_0_20px_rgba(245,158,11,0.15)]'
+                  : 'border-purple-500/40 shadow-[0_0_20px_rgba(168,85,247,0.15)]'
+              }`}
+              onClick={() => {
+                dismissNotification(notif.id);
+                handleTabSwitch(notif.type === 'enquiry' ? 'enquiries' : 'feedbacks');
+              }}
+            >
+              <div className="flex items-start gap-3">
+                <div className={`shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-sm ${
+                  notif.type === 'enquiry'
+                    ? 'bg-amber-500/20 text-amber-400'
+                    : 'bg-purple-500/20 text-purple-400'
+                }`}>
+                  {notif.type === 'enquiry' ? <FaQuestionCircle /> : <FaComments />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-white">{notif.title}</p>
+                  <p className="text-xs text-gray-400 mt-0.5 truncate">{notif.message}</p>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); dismissNotification(notif.id); }}
+                  className="shrink-0 text-gray-500 hover:text-white transition-colors"
+                >
+                  <FaTimes className="text-xs" />
+                </button>
+              </div>
+              {/* Auto-dismiss progress bar */}
+              <motion.div
+                className={`h-0.5 rounded-full mt-3 ${
+                  notif.type === 'enquiry' ? 'bg-amber-500/60' : 'bg-purple-500/60'
+                }`}
+                initial={{ width: '100%' }}
+                animate={{ width: '0%' }}
+                transition={{ duration: 5, ease: 'linear' }}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
+      {/* ═══ Sidebar Navigation ═══ */}
       <aside className="w-full md:w-64 bg-steel/65 backdrop-blur-md border-b md:border-b-0 md:border-r border-white/10 flex flex-col justify-between shrink-0 z-20">
         <div>
           {/* Logo / Brand */}
@@ -267,19 +335,14 @@ export default function Dashboard() {
 
           {/* Navigation Links */}
           <nav className="p-4 space-y-1">
-            {[
-              { id: 'overview', label: 'Overview', icon: FaTachometerAlt },
-              { id: 'products', label: 'Products', icon: FaBoxOpen },
-              { id: 'enquiries', label: 'Enquiries', icon: FaQuestionCircle },
-              { id: 'feedbacks', label: 'Feedbacks', icon: FaComments },
-            ].map(tab => {
+            {sidebarTabs.map(tab => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
-                  onClick={() => { setActiveTab(tab.id); setSearchQuery(''); }}
-                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg text-base font-semibold transition-all ${
+                  onClick={() => handleTabSwitch(tab.id)}
+                  className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg text-base font-semibold transition-all relative ${
                     active 
                       ? 'bg-electric text-navy shadow-[0_0_15px_rgba(0,212,255,0.3)]' 
                       : 'text-gray-400 hover:text-white hover:bg-white/5'
@@ -287,31 +350,62 @@ export default function Dashboard() {
                 >
                   <Icon className="text-lg" />
                   <span>{tab.label}</span>
+                  {/* Notification Badge */}
+                  {tab.badge > 0 && (
+                    <motion.span
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className={`absolute right-3 top-1/2 -translate-y-1/2 min-w-[20px] h-5 flex items-center justify-center rounded-full text-[10px] font-bold px-1.5 ${
+                        active
+                          ? 'bg-navy text-electric'
+                          : 'bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.5)]'
+                      }`}
+                    >
+                      {tab.badge > 99 ? '99+' : tab.badge}
+                    </motion.span>
+                  )}
                 </button>
               );
             })}
           </nav>
         </div>
 
-        {/* User Info & Logout */}
-        <div className="p-4 border-t border-white/10 bg-black/10">
-          <div className="flex items-center justify-between">
-            <div className="truncate pr-2">
-              <p className="text-sm font-semibold text-white truncate">{user?.name || 'Administrator'}</p>
-              <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+        {/* Connection Status & User Info */}
+        <div>
+          {/* Live Connection Indicator */}
+          <div className="px-6 py-2 border-t border-white/5">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-widest">
+              <span className={`w-2 h-2 rounded-full ${
+                socketConnected 
+                  ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.7)] animate-pulse' 
+                  : 'bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.7)]'
+              }`} />
+              <span className={socketConnected ? 'text-emerald-400' : 'text-red-400'}>
+                {socketConnected ? 'Live' : 'Polling'}
+              </span>
             </div>
-            <button
-              onClick={handleLogout}
-              title="Logout"
-              className="p-2.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
-            >
-              <FaSignOutAlt />
-            </button>
+          </div>
+
+          {/* User Info & Logout */}
+          <div className="p-4 border-t border-white/10 bg-black/10">
+            <div className="flex items-center justify-between">
+              <div className="truncate pr-2">
+                <p className="text-sm font-semibold text-white truncate">{user?.name || 'Administrator'}</p>
+                <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                title="Logout"
+                className="p-2.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
+              >
+                <FaSignOutAlt />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
 
-      {/* Main Content Area */}
+      {/* ═══ Main Content Area ═══ */}
       <main className="flex-1 p-6 md:p-10 z-10 overflow-y-auto max-h-screen">
         <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <div>
@@ -321,7 +415,7 @@ export default function Dashboard() {
             <p className="text-sm text-gray-400">Manage your system variables, files, and queries.</p>
           </div>
           
-          {/* Action or Search */}
+          {/* Search */}
           {activeTab !== 'overview' && (
             <div className="flex items-center gap-3 w-full sm:w-auto">
               <div className="relative flex-1 sm:w-64">
@@ -334,14 +428,6 @@ export default function Dashboard() {
                 />
                 <FaSearch className="absolute left-3.5 top-3 text-gray-400 text-sm" />
               </div>
-              {activeTab === 'products' && (
-                <button
-                  onClick={openCreateModal}
-                  className="bg-electric text-navy font-bold px-4 py-2 rounded-lg hover:bg-white transition-all flex items-center gap-2 text-sm whitespace-nowrap shadow-[0_0_15px_rgba(0,212,255,0.2)]"
-                >
-                  <FaPlus /> Add Product
-                </button>
-              )}
             </div>
           )}
         </header>
@@ -358,9 +444,8 @@ export default function Dashboard() {
             {activeTab === 'overview' && (
               <div className="space-y-8">
                 {/* Stats Cards Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                   {[
-                    { label: 'Products In Catalog', count: stats.products, icon: FaBoxOpen, color: 'text-electric', bg: 'from-electric/10' },
                     { label: 'Registered Accounts', count: stats.users, icon: FaUsers, color: 'text-emerald-400', bg: 'from-emerald-500/10' },
                     { label: 'Customer Enquiries', count: stats.enquiries, icon: FaQuestionCircle, color: 'text-amber-400', bg: 'from-amber-500/10' },
                     { label: 'User Feedbacks', count: stats.feedbacks, icon: FaComments, color: 'text-purple-400', bg: 'from-purple-500/10' },
@@ -371,7 +456,15 @@ export default function Dashboard() {
                     >
                       <div>
                         <p className="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">{item.label}</p>
-                        <p className="text-4xl font-orbitron font-bold text-white">{item.count}</p>
+                        <motion.p
+                          key={item.count}
+                          initial={{ scale: 1.3, color: '#00d4ff' }}
+                          animate={{ scale: 1, color: '#ffffff' }}
+                          transition={{ duration: 0.4 }}
+                          className="text-4xl font-orbitron font-bold"
+                        >
+                          {item.count}
+                        </motion.p>
                       </div>
                       <item.icon className={`${item.color} text-4xl opacity-80`} />
                     </div>
@@ -424,8 +517,11 @@ export default function Dashboard() {
                           <span className="text-white font-medium">5000</span>
                         </div>
                         <div className="flex justify-between py-1 border-b border-white/5">
-                          <span className="text-gray-400">Node Environment</span>
-                          <span className="text-white font-medium">Development</span>
+                          <span className="text-gray-400">WebSocket Status</span>
+                          <span className={`font-semibold flex items-center gap-1.5 ${socketConnected ? 'text-emerald-400' : 'text-red-400'}`}>
+                            <span className={`w-2 h-2 rounded-full ${socketConnected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`}></span>
+                            {socketConnected ? 'Connected' : 'Disconnected'}
+                          </span>
                         </div>
                         <div className="flex justify-between py-1">
                           <span className="text-gray-400">Registered Admin</span>
@@ -436,13 +532,13 @@ export default function Dashboard() {
                     
                     <div className="mt-6 pt-4 border-t border-white/5 flex gap-4">
                       <button 
-                        onClick={() => { setActiveTab('enquiries'); }}
+                        onClick={() => handleTabSwitch('enquiries')}
                         className="flex-1 bg-steel border border-white/10 hover:border-electric/50 text-white font-semibold py-2.5 rounded-xl transition-all text-xs text-center uppercase tracking-wider"
                       >
                         Enquiries Queue
                       </button>
                       <button 
-                        onClick={loadData}
+                        onClick={() => loadData()}
                         className="flex-1 bg-electric hover:bg-white text-navy font-bold py-2.5 rounded-xl transition-all text-xs text-center uppercase tracking-wider"
                       >
                         Refresh Console
@@ -453,89 +549,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Products Tab */}
-            {activeTab === 'products' && (
-              <div className="bg-steel/40 border border-white/10 rounded-2xl p-6 shadow-lg">
-                {products.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400">
-                    <p className="mb-4">No products found. Start by listing a new product.</p>
-                    <button 
-                      onClick={openCreateModal}
-                      className="bg-electric text-navy font-bold px-5 py-2 rounded-lg hover:bg-white transition-colors text-sm"
-                    >
-                      Create First Product
-                    </button>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-white/10 text-gray-400 text-sm tracking-wider uppercase">
-                          <th className="py-4 px-4 font-semibold">Image</th>
-                          <th className="py-4 px-4 font-semibold">Product Name</th>
-                          <th className="py-4 px-4 font-semibold">Category</th>
-                          <th className="py-4 px-4 font-semibold">Price</th>
-                          <th className="py-4 px-4 font-semibold">Stock</th>
-                          <th className="py-4 px-4 font-semibold">Status</th>
-                          <th className="py-4 px-4 font-semibold text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-sm">
-                        {products
-                          .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.category.toLowerCase().includes(searchQuery.toLowerCase()))
-                          .map((prod) => (
-                            <tr key={prod._id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                              <td className="py-3 px-4">
-                                <img 
-                                  src={prod.images?.[0] || 'https://images.unsplash.com/photo-1581092335397-9583eb92d232?auto=format&fit=crop&q=80&w=100'} 
-                                  alt="" 
-                                  className="w-12 h-12 object-cover rounded-lg bg-navy border border-white/10"
-                                  onError={(e) => { e.target.onerror = null; e.target.src = 'https://images.unsplash.com/photo-1581092335397-9583eb92d232?auto=format&fit=crop&q=80&w=100'; }}
-                                />
-                              </td>
-                              <td className="py-3 px-4 font-semibold text-white text-base">{prod.name}</td>
-                              <td className="py-3 px-4 text-gray-300 uppercase text-xs tracking-wider">
-                                <span className="bg-steel border border-white/10 px-2 py-1 rounded">
-                                  {categoryLabels[prod.category] || prod.category}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4 text-electric font-semibold text-base">₹{prod.price?.toLocaleString('en-IN')}</td>
-                              <td className="py-3 px-4 text-gray-300">{prod.stock} items</td>
-                              <td className="py-3 px-4">
-                                <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full ${
-                                  prod.isActive ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                                }`}>
-                                  {prod.isActive ? 'Active' : 'Draft'}
-                                </span>
-                              </td>
-                              <td className="py-3 px-4 text-right">
-                                <div className="flex justify-end gap-2">
-                                  <button
-                                    onClick={() => openEditModal(prod)}
-                                    className="p-2 rounded bg-electric/10 text-electric hover:bg-electric hover:text-navy transition-all"
-                                    title="Edit Product"
-                                  >
-                                    <FaEdit />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteProduct(prod._id)}
-                                    className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
-                                    title="Delete Product"
-                                  >
-                                    <FaTrash />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Enquiries Tab */}
+            {/* ═══ Enquiries Tab ═══ */}
             {activeTab === 'enquiries' && (
               <div className="bg-steel/40 border border-white/10 rounded-2xl p-6 shadow-lg">
                 {enquiries.length === 0 ? (
@@ -556,54 +570,68 @@ export default function Dashboard() {
                       <tbody className="text-sm">
                         {enquiries
                           .filter(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()) || e.email.toLowerCase().includes(searchQuery.toLowerCase()) || e.message.toLowerCase().includes(searchQuery.toLowerCase()))
-                          .map((enq) => (
-                            <tr key={enq._id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                              <td className="py-4 px-4 text-gray-400 whitespace-nowrap">
-                                {new Date(enq.createdAt).toLocaleDateString()}
-                              </td>
-                              <td className="py-4 px-4">
-                                <p className="font-semibold text-white">{enq.name}</p>
-                                <p className="text-electric text-xs">
-                                  <a href={`mailto:${enq.email}`}>{enq.email}</a>
-                                </p>
-                                {enq.phone && <p className="text-gray-500 text-xs">{enq.phone}</p>}
-                              </td>
-                              <td className="py-4 px-4">
-                                <span className="text-white bg-steel border border-white/10 px-2 py-1 rounded text-xs uppercase">
-                                  {enq.product || 'General'}
-                                </span>
-                              </td>
-                              <td className="py-4 px-4 text-gray-300 min-w-[200px] max-w-sm leading-relaxed">
-                                {enq.message}
-                              </td>
-                              <td className="py-4 px-4">
-                                <select
-                                  value={enq.status || 'new'}
-                                  onChange={(e) => handleUpdateEnquiryStatus(enq._id, e.target.value)}
-                                  className={`border rounded-lg px-2.5 py-1 text-xs font-semibold focus:outline-none focus:border-electric transition-colors bg-navy ${
-                                    enq.status === 'new' 
-                                      ? 'text-electric border-electric/30' 
-                                      : enq.status === 'contacted'
-                                      ? 'text-amber-400 border-amber-500/30'
-                                      : 'text-green-400 border-green-500/30'
-                                  }`}
-                                >
-                                  <option value="new">🆕 New</option>
-                                  <option value="contacted">📞 Contacted</option>
-                                  <option value="resolved">✅ Resolved</option>
-                                </select>
-                              </td>
-                              <td className="py-4 px-4 text-right">
-                                <button
-                                  onClick={() => handleDeleteEnquiry(enq._id)}
-                                  className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-sm"
-                                  title="Delete Enquiry"
-                                >
-                                  <FaTrash />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          .map((enq) => {
+                            const isNew = newItemIds.has(enq._id);
+                            return (
+                              <motion.tr
+                                key={enq._id}
+                                initial={isNew ? { backgroundColor: 'rgba(245,158,11,0.15)' } : false}
+                                animate={{ backgroundColor: 'rgba(245,158,11,0)' }}
+                                transition={{ duration: 3 }}
+                                className={`border-b border-white/5 hover:bg-white/5 transition-colors ${
+                                  isNew ? 'border-l-2 border-l-amber-400' : ''
+                                }`}
+                              >
+                                <td className="py-4 px-4 text-gray-400 whitespace-nowrap">
+                                  {new Date(enq.createdAt).toLocaleDateString()}
+                                  {isNew && (
+                                    <span className="ml-2 inline-block bg-amber-500/20 text-amber-400 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase">New</span>
+                                  )}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <p className="font-semibold text-white">{enq.name}</p>
+                                  <p className="text-electric text-xs">
+                                    <a href={`mailto:${enq.email}`}>{enq.email}</a>
+                                  </p>
+                                  {enq.phone && <p className="text-gray-500 text-xs">{enq.phone}</p>}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <span className="text-white bg-steel border border-white/10 px-2 py-1 rounded text-xs uppercase">
+                                    {enq.product || 'General'}
+                                  </span>
+                                </td>
+                                <td className="py-4 px-4 text-gray-300 min-w-[200px] max-w-sm leading-relaxed">
+                                  {enq.message}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <select
+                                    value={enq.status || 'new'}
+                                    onChange={(e) => handleUpdateEnquiryStatus(enq._id, e.target.value)}
+                                    className={`border rounded-lg px-2.5 py-1 text-xs font-semibold focus:outline-none focus:border-electric transition-colors bg-navy ${
+                                      enq.status === 'new' 
+                                        ? 'text-electric border-electric/30' 
+                                        : enq.status === 'contacted'
+                                        ? 'text-amber-400 border-amber-500/30'
+                                        : 'text-green-400 border-green-500/30'
+                                    }`}
+                                  >
+                                    <option value="new">🆕 New</option>
+                                    <option value="contacted">📞 Contacted</option>
+                                    <option value="resolved">✅ Resolved</option>
+                                  </select>
+                                </td>
+                                <td className="py-4 px-4 text-right">
+                                  <button
+                                    onClick={() => handleDeleteEnquiry(enq._id)}
+                                    className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-sm"
+                                    title="Delete Enquiry"
+                                  >
+                                    <FaTrash />
+                                  </button>
+                                </td>
+                              </motion.tr>
+                            );
+                          })}
                       </tbody>
                     </table>
                   </div>
@@ -611,7 +639,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Feedbacks Tab */}
+            {/* ═══ Feedbacks Tab ═══ */}
             {activeTab === 'feedbacks' && (
               <div className="bg-steel/40 border border-white/10 rounded-2xl p-6 shadow-lg">
                 {feedbacks.length === 0 ? (
@@ -631,36 +659,50 @@ export default function Dashboard() {
                       <tbody className="text-sm">
                         {feedbacks
                           .filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase()) || f.email.toLowerCase().includes(searchQuery.toLowerCase()) || f.message.toLowerCase().includes(searchQuery.toLowerCase()))
-                          .map((fb) => (
-                            <tr key={fb._id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                              <td className="py-4 px-4 text-gray-400 whitespace-nowrap">
-                                {new Date(fb.createdAt).toLocaleDateString()}
-                              </td>
-                              <td className="py-4 px-4">
-                                <p className="font-semibold text-white">{fb.name}</p>
-                                <p className="text-electric text-xs">
-                                  <a href={`mailto:${fb.email}`}>{fb.email}</a>
-                                </p>
-                              </td>
-                              <td className="py-4 px-4 whitespace-nowrap">
-                                <span className="text-gold tracking-widest text-base">
-                                  {'★'.repeat(fb.rating)}{'☆'.repeat(5 - fb.rating)}
-                                </span>
-                              </td>
-                              <td className="py-4 px-4 text-gray-300 min-w-[200px] leading-relaxed">
-                                {fb.message}
-                              </td>
-                              <td className="py-4 px-4 text-right">
-                                <button
-                                  onClick={() => handleDeleteFeedback(fb._id)}
-                                  className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-sm"
-                                  title="Delete Feedback"
-                                >
-                                  <FaTrash />
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          .map((fb) => {
+                            const isNew = newItemIds.has(fb._id);
+                            return (
+                              <motion.tr
+                                key={fb._id}
+                                initial={isNew ? { backgroundColor: 'rgba(168,85,247,0.15)' } : false}
+                                animate={{ backgroundColor: 'rgba(168,85,247,0)' }}
+                                transition={{ duration: 3 }}
+                                className={`border-b border-white/5 hover:bg-white/5 transition-colors ${
+                                  isNew ? 'border-l-2 border-l-purple-400' : ''
+                                }`}
+                              >
+                                <td className="py-4 px-4 text-gray-400 whitespace-nowrap">
+                                  {new Date(fb.createdAt).toLocaleDateString()}
+                                  {isNew && (
+                                    <span className="ml-2 inline-block bg-purple-500/20 text-purple-400 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase">New</span>
+                                  )}
+                                </td>
+                                <td className="py-4 px-4">
+                                  <p className="font-semibold text-white">{fb.name}</p>
+                                  <p className="text-electric text-xs">
+                                    <a href={`mailto:${fb.email}`}>{fb.email}</a>
+                                  </p>
+                                </td>
+                                <td className="py-4 px-4 whitespace-nowrap">
+                                  <span className="text-gold tracking-widest text-base">
+                                    {'★'.repeat(fb.rating)}{'☆'.repeat(5 - fb.rating)}
+                                  </span>
+                                </td>
+                                <td className="py-4 px-4 text-gray-300 min-w-[200px] leading-relaxed">
+                                  {fb.message}
+                                </td>
+                                <td className="py-4 px-4 text-right">
+                                  <button
+                                    onClick={() => handleDeleteFeedback(fb._id)}
+                                    className="p-2 rounded bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-sm"
+                                    title="Delete Feedback"
+                                  >
+                                    <FaTrash />
+                                  </button>
+                                </td>
+                              </motion.tr>
+                            );
+                          })}
                       </tbody>
                     </table>
                   </div>
@@ -670,193 +712,6 @@ export default function Dashboard() {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      {/* Product Creator/Editor Dialog Modal */}
-      <AnimatePresence>
-        {showProductModal && (
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-steel border border-white/10 w-full max-w-3xl rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
-            >
-              {/* Modal Header */}
-              <header className="p-6 border-b border-white/10 flex justify-between items-center bg-black/10 shrink-0">
-                <h3 className="text-xl font-orbitron font-bold text-white uppercase tracking-wider">
-                  {showProductModal === 'create' ? 'Add New Product' : 'Edit Product'}
-                </h3>
-                <button 
-                  onClick={() => setShowProductModal(false)}
-                  className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all"
-                >
-                  <FaTimes />
-                </button>
-              </header>
-
-              {/* Modal Form Content */}
-              <form onSubmit={handleSubmitProduct} className="flex-1 overflow-y-auto p-6 space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Product Name */}
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Product Name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={productForm.name}
-                      onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                      placeholder="e.g. Siemens PLC S7-1200"
-                      className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                    />
-                  </div>
-
-                  {/* Product Category */}
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Category *</label>
-                    <select
-                      value={productForm.category}
-                      onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                      className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                    >
-                      {Object.entries(categoryLabels).map(([val, name]) => (
-                        <option key={val} value={val}>{name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Pricing (INR) */}
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Price (INR) *</label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      value={productForm.price}
-                      onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
-                      placeholder="e.g. 15000"
-                      className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                    />
-                  </div>
-
-                  {/* Inventory Stock */}
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Stock Qty *</label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      value={productForm.stock}
-                      onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
-                      className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Description */}
-                <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Product Description</label>
-                  <textarea
-                    rows="3"
-                    value={productForm.description}
-                    onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                    placeholder="Provide technical descriptors, scope, and product applications..."
-                    className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                  />
-                </div>
-
-                {/* Image URL */}
-                <div className="space-y-2">
-                  <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold block">Image URL</label>
-                  <input
-                    type="url"
-                    value={productForm.imageUrl}
-                    onChange={(e) => setProductForm({ ...productForm, imageUrl: e.target.value })}
-                    placeholder="https://images.unsplash.com/... or relative path"
-                    className="w-full bg-navy border border-white/10 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-electric text-sm"
-                  />
-                </div>
-
-                {/* Dynamic Specifications */}
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center border-b border-white/10 pb-2">
-                    <label className="text-xs uppercase tracking-wider text-gray-400 font-semibold">Technical Specifications</label>
-                    <button
-                      type="button"
-                      onClick={handleAddSpecField}
-                      className="text-electric hover:text-white transition-all text-xs font-semibold flex items-center gap-1.5"
-                    >
-                      <FaPlusCircle /> Add Spec Row
-                    </button>
-                  </div>
-
-                  {productForm.specifications.length === 0 ? (
-                    <p className="text-xs text-gray-500">No specifications defined for this product.</p>
-                  ) : (
-                    <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
-                      {productForm.specifications.map((spec, i) => (
-                        <div key={i} className="flex gap-2 items-center">
-                          <input
-                            type="text"
-                            placeholder="Specification Key (e.g., Voltage)"
-                            value={spec.key}
-                            onChange={(e) => handleSpecChange(i, 'key', e.target.value)}
-                            className="flex-1 bg-navy border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-electric text-xs"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Value (e.g., 230V AC)"
-                            value={spec.value}
-                            onChange={(e) => handleSpecChange(i, 'value', e.target.value)}
-                            className="flex-1 bg-navy border border-white/10 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-electric text-xs"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveSpecField(i)}
-                            className="p-2 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white rounded-lg transition-all text-xs"
-                          >
-                            <FaTrash />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Status Options */}
-                <div className="flex items-center gap-4 bg-black/10 p-3 rounded-xl border border-white/5">
-                  <span className="text-xs uppercase tracking-wider text-gray-400 font-semibold">Availability Status:</span>
-                  <label className="flex items-center gap-2 text-sm cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={productForm.isActive}
-                      onChange={(e) => setProductForm({ ...productForm, isActive: e.target.checked })}
-                      className="accent-electric"
-                    />
-                    <span>Visible in Product Catalog (Active)</span>
-                  </label>
-                </div>
-
-                {/* Modal Actions Footer */}
-                <footer className="pt-4 border-t border-white/10 flex justify-end gap-3 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setShowProductModal(false)}
-                    className="bg-navy border border-white/10 hover:bg-white/5 text-white font-semibold px-5 py-2.5 rounded-xl transition-all text-sm"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="bg-electric hover:bg-white text-navy font-bold px-6 py-2.5 rounded-xl transition-all text-sm shadow-[0_0_15px_rgba(0,212,255,0.2)] flex items-center gap-2"
-                  >
-                    <FaCheck /> {showProductModal === 'create' ? 'Create Product' : 'Save Changes'}
-                  </button>
-                </footer>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

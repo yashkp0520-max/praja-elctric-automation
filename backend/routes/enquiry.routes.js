@@ -20,6 +20,13 @@ router.post('/', async (req, res) => {
     });
 
     await newEnquiry.save();
+
+    // Emit real-time event to admin panel
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('new-enquiry', newEnquiry);
+    }
+
     res.status(201).json({ success: true, enquiry: newEnquiry });
   } catch (error) {
     console.error('Error saving enquiry:', error);

@@ -19,6 +19,13 @@ router.post('/', async (req, res) => {
     });
 
     await newFeedback.save();
+
+    // Emit real-time event to admin panel
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('new-feedback', newFeedback);
+    }
+
     res.status(201).json({ success: true, feedback: newFeedback });
   } catch (error) {
     console.error('Error saving feedback:', error);
