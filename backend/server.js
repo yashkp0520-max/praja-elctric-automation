@@ -1,3 +1,8 @@
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -57,11 +62,13 @@ app.use('/api/enquiries', require('./routes/enquiry.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/feedback', require('./routes/feedback.routes'));
 
-mongoose.connect(process.env.MONGO_URI).then(() => {
-  server.listen(process.env.PORT || 5000, () =>
-    console.log(`Server running on port ${process.env.PORT || 5000}`)
-  );
-}).catch(err => {
-  console.error("MongoDB Connection Error:", err.message);
-  console.log("Please ensure MongoDB is running or update your MONGO_URI in the .env file.");
-});
+server.listen(process.env.PORT || 5000, () =>
+  console.log(`🚀 Server running on port ${process.env.PORT || 5000}`)
+);
+
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("📂 Connected to MongoDB successfully!"))
+  .catch(err => {
+    console.error("❌ MongoDB Connection Error:", err.message);
+    console.log("⚠️ The server is running, but database connection failed. Please check your MONGO_URI or MongoDB Atlas IP whitelist.");
+  });

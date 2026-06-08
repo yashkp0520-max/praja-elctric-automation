@@ -41,7 +41,6 @@ export default function Footer() {
               {[
                 { to: '/', label: 'Home' },
                 { to: '/panels', label: 'Panels' },
-                { to: '/products', label: 'Products' },
                 { to: '/services', label: 'Services' },
                 { to: '/about', label: 'About Us' },
               ].map(link => (

@@ -22,7 +22,7 @@ export default function Register() {
     
     try {
       await register({ name, email, password });
-      navigate('/products');
+      navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to register. Email might be in use.');
     } finally {
